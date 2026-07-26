@@ -41,6 +41,12 @@ export default function VendorPage(){
             <button style={{background:'rgba(255,255,255,.15)',border:'none',color:'#fff',width:30,height:30,borderRadius:'50%',fontSize:14,cursor:'pointer'}} onClick={()=>setMobMenuOpen(false)}>✕</button>
           </div>
           <div style={{fontSize:'11px',opacity:.5,color:'#fff',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'1px'}}>Vendor · Tamil Nadu</div>
+          {[{id:'orders',icon:'📦',l:'My Orders'},{id:'stock',icon:'🌱',l:'My Stock'},{id:'analytics',icon:'📊',l:'Analytics'}].map(n=>(
+            <div key={n.id} onClick={()=>{setTab(n.id);setMobMenuOpen(false);}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'13px 12px',borderRadius:'10px',color:'#fff',fontSize:'15px',fontWeight:tab===n.id?700:500,background:tab===n.id?'rgba(255,255,255,.14)':'transparent',cursor:'pointer',marginBottom:'2px'}}>
+              <span style={{fontSize:'18px'}}>{n.icon}</span>{n.l}
+            </div>
+          ))}
+          <div onClick={()=>router.push('/')} style={{marginTop:'auto',display:'flex',alignItems:'center',gap:'12px',padding:'13px 12px',borderRadius:'10px',color:'#fff',fontSize:'15px',fontWeight:500,cursor:'pointer',borderTop:'1px solid rgba(255,255,255,.12)'}}>⏎ Switch role</div>
         </div>}
         <div className="dash-topbar">
           <div><h2>Vendor Dashboard</h2><p style={{fontSize:'12px',color:'var(--text-muted)',margin:0}}>Tamil Nadu Nursery Partner</p></div>

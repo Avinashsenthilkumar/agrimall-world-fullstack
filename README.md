@@ -433,6 +433,32 @@ npx prisma migrate deploy
 npm run build && npm start
 ```
 
+### Everything `next build` needs lives in `dependencies`
+
+There are no `devDependencies` in this project, on purpose. Managed hosts
+(Render, Railway, Fly, most Docker images) install with `NODE_ENV=production`,
+and npm then **skips `devDependencies` entirely**. That silently removes:
+
+| package | needed by |
+| --- | --- |
+| `typescript`, `@types/*` | `next build`'s "Linting and checking validity of types" step |
+| `prisma` | the `prisma generate` in `postinstall` and `prisma migrate deploy` |
+| `tsx` | `npm run db:seed` |
+
+All four are *build-time* tools, but on these hosts the build runs **inside the
+production install** — so a build-time tool parked in `devDependencies` is
+simply absent, and the build fails with:
+
+```
+It looks like you're trying to use TypeScript but do not have the
+required package(s) installed.
+```
+
+Keeping them in `dependencies` makes the build work the same way locally, in
+CI, and on any host, with no `NPM_CONFIG_PRODUCTION=false` escape hatch to
+remember. The cost is a slightly larger `node_modules` on the server, which is
+discarded after `next build` anyway.
+
 Schedule the two cron endpoints (both need the `x-cron-secret` header):
 
 ```bash

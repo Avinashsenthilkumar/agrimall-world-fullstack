@@ -362,7 +362,7 @@ export const api = {
 
   // --- orders ------------------------------------------------------------
   orders: {
-    list: (query?: { page?: number; status?: string; q?: string }) =>
+    list: (query?: { page?: number; perPage?: number; status?: string; q?: string }) =>
       get<{ orders: Array<Record<string, unknown>>; pagination: Pagination }>('/api/orders', query),
     detail: (id: string) =>
       get<{ order: Record<string, unknown>; parcels: Parcel[] }>(`/api/orders/${id}`),
@@ -427,7 +427,7 @@ export const api = {
         recentOrders: Array<Record<string, unknown>>;
         lowStock: Array<Record<string, unknown>>;
       }>('/api/seller/dashboard'),
-    products: (query?: { page?: number; status?: string }) =>
+    products: (query?: { page?: number; perPage?: number; status?: string }) =>
       get<{ products: Array<Record<string, unknown>>; pagination: Pagination }>(
         '/api/seller/products',
         query,
@@ -444,12 +444,12 @@ export const api = {
         `/api/seller/products/${id}/stock`,
         { onHand, ...(note ? { note } : {}) },
       ),
-    inventory: (query?: { page?: number; low?: string }) =>
+    inventory: (query?: { page?: number; perPage?: number; low?: string }) =>
       get<{ inventory: Array<Record<string, unknown>>; movements: Array<Record<string, unknown>> }>(
         '/api/seller/inventory',
         query,
       ),
-    orders: (query?: { page?: number; status?: string; q?: string }) =>
+    orders: (query?: { page?: number; perPage?: number; status?: string; q?: string }) =>
       get<{
         orders: Array<Record<string, unknown>>;
         statusCounts: Array<{ status: string; count: number }>;
@@ -503,14 +503,14 @@ export const api = {
         trend: Array<{ day: string; gmv: number; revenue: number; orders: number }>;
         topSellers: Array<{ sellerId: string; name: string; revenue: number; orders: number }>;
       }>('/api/admin/dashboard'),
-    sellers: (query?: { page?: number; status?: string; q?: string }) =>
+    sellers: (query?: { page?: number; perPage?: number; status?: string; q?: string }) =>
       get<{ sellers: Array<Record<string, unknown>>; pagination: Pagination }>('/api/admin/sellers', query),
     seller: (id: string) => get<{ seller: Record<string, unknown> }>(`/api/admin/sellers/${id}`),
     decideSeller: (
       id: string,
       body: { decision: string; reason?: string; commissionRate?: number },
     ) => post<{ status: string; message: string }>(`/api/admin/sellers/${id}/decision`, body),
-    products: (query?: { page?: number; approval?: string; q?: string }) =>
+    products: (query?: { page?: number; perPage?: number; approval?: string; q?: string }) =>
       get<{
         products: Array<Record<string, unknown>>;
         queueCounts: Array<{ approvalStatus: string; count: number }>;
@@ -518,7 +518,7 @@ export const api = {
       }>('/api/admin/products', query),
     moderateProduct: (id: string, body: { decision: 'APPROVE' | 'REJECT'; reason?: string }) =>
       post<{ message: string }>(`/api/admin/products/${id}/moderate`, body),
-    orders: (query?: { page?: number; status?: string; q?: string; sellerId?: string }) =>
+    orders: (query?: { page?: number; perPage?: number; status?: string; q?: string; sellerId?: string }) =>
       get<{
         orders: Array<Record<string, unknown>>;
         statusCounts: Array<{ status: string; count: number }>;
@@ -555,12 +555,12 @@ export const api = {
     settings: () => get<{ settings: Record<string, unknown>; descriptions: Record<string, string> }>('/api/admin/settings'),
     updateSettings: (body: Record<string, unknown>) =>
       patch<{ settings: Record<string, unknown>; message: string }>('/api/admin/settings', body),
-    customers: (query?: { page?: number; q?: string }) =>
+    customers: (query?: { page?: number; perPage?: number; q?: string }) =>
       get<{ customers: Array<Record<string, unknown>>; pagination: Pagination }>(
         '/api/admin/customers',
         query,
       ),
-    audit: (query?: { page?: number; entityType?: string; entityId?: string }) =>
+    audit: (query?: { page?: number; perPage?: number; entityType?: string; entityId?: string }) =>
       get<{ logs: Array<Record<string, unknown>> }>('/api/admin/audit', query),
   },
 

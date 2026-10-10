@@ -66,6 +66,18 @@ export async function markNotificationsRead(userId: string, ids?: string[]): Pro
 // With EMAIL_DRIVER=LOG (the default) messages are logged, never silently
 // swallowed, so nothing pretends to have been delivered.
 
+/** The slice of nodemailer's API this file uses. Declared locally so the
+ *  package stays optional — we never import its types either. */
+interface NodemailerTransport {
+  sendMail(message: {
+    from: string;
+    to: string;
+    subject: string;
+    html: string;
+    text?: string;
+  }): Promise<unknown>;
+}
+
 export interface EmailMessage {
   to: string;
   subject: string;
@@ -102,13 +114,35 @@ export async function sendEmail(msg: EmailMessage): Promise<{ delivered: boolean
     }
 
     case 'SMTP': {
-      // nodemailer is an optional dependency; install it to enable SMTP.
+      // nodemailer is a GENUINELY OPTIONAL dependency: only deployments that
+      // set EMAIL_DRIVER=SMTP need it (`npm install nodemailer`).
+      //
+      // Two things are required to keep it optional, and both matter:
+      //
+      //   1. the specifier lives in a variable, and
+      //   2. it is marked /* webpackIgnore: true */
+      //
+      // Without them webpack statically resolves the import at BUILD time and
+      // fails with "Module not found: Can't resolve 'nodemailer'" on every
+      // deployment that hasn't installed it — even one using EMAIL_DRIVER=LOG
+      // that will never call this branch. (`'nodemailer' as string` does not
+      // help: that is a type-level cast and the bundler still sees a literal.)
       if (!env.SMTP_HOST) {
         console.warn('[email] SMTP_HOST missing — not sent:', msg.subject);
         return { delivered: false, driver: 'SMTP(unconfigured)' };
       }
       try {
-        const nodemailer = await import('nodemailer' as string);
+        const moduleName = 'nodemailer';
+        const imported = (await import(/* webpackIgnore: true */ moduleName)) as {
+          default?: { createTransport: (o: unknown) => NodemailerTransport };
+          createTransport?: (o: unknown) => NodemailerTransport;
+        };
+        // CommonJS packages arrive under .default through a dynamic import.
+        const nodemailer = imported.default ?? imported;
+        if (!nodemailer?.createTransport) {
+          console.error('[email] nodemailer is not installed — run: npm install nodemailer');
+          return { delivered: false, driver: 'SMTP(not installed)' };
+        }
         const transport = nodemailer.createTransport({
           host: env.SMTP_HOST,
           port: env.SMTP_PORT ?? 587,

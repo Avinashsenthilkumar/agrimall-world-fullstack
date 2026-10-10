@@ -5,7 +5,9 @@ const nextConfig = {
 
   // Prisma's query engine is a native binary; keep it out of the bundle.
   experimental: {
-    serverComponentsExternalPackages: ['@prisma/client', 'bcryptjs'],
+    // nodemailer is listed here as well as being dynamically imported, so a
+    // deployment that never uses SMTP does not need it installed to build.
+    serverComponentsExternalPackages: ['@prisma/client', 'bcryptjs', 'nodemailer'],
   },
 
   images: {

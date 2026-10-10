@@ -1,5 +1,43 @@
+# dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# next
 .next/
-data/
-*.log
+out/
+build/
+next-env.d.ts
+
+# production
+dist/
+
+# secrets — NEVER commit these (§30)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# uploads written by STORAGE_DRIVER=LOCAL
+/public/uploads/*
+!/public/uploads/.gitkeep
+/storage/private/*
+!/storage/private/.gitkeep
+
+# prisma
+prisma/*.db
+prisma/*.db-journal
+
+# misc
 .DS_Store
+*.pem
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vercel
+*.tsbuildinfo
+coverage/
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,1218 @@
+// AgriMall World — multi-vendor marketplace data model.
+//
+// DESIGN NOTE (the single most important change from v1):
+// There is NO `orders.sellerId`. A customer Order is a *payment envelope*;
+// the unit of fulfilment, commission and payout is SellerOrder. One Order
+// fans out to N SellerOrders (one per distinct seller in the cart), each with
+// its own status, shipment, commission and payout. See §8 of the spec.
+//
+// MONEY: all amounts are stored in PAISE (integer, 1 INR = 100 paise).
+// Floating point is never used for money anywhere in this codebase.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  SELLER
+  ADMIN
+  LOGISTICS
+}
+
+enum SellerStatus {
+  DRAFT
+  PENDING_REVIEW
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  SUSPENDED
+  BLOCKED
+}
+
+enum KycStatus {
+  DRAFT
+  PENDING_REVIEW
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum ProductStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ACTIVE
+  INACTIVE
+  OUT_OF_STOCK
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_FAILED
+  CONFIRMED
+  PROCESSING
+  PARTIALLY_SHIPPED
+  SHIPPED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CANCELLED
+  PARTIALLY_CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum SellerOrderStatus {
+  PENDING
+  ACCEPTED
+  PACKING
+  READY_FOR_PICKUP
+  SHIPPED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURNED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentProvider {
+  RAZORPAY
+  STRIPE
+  COD
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  ON_HOLD
+}
+
+enum CommissionStatus {
+  PENDING
+  EARNED
+  REVERSED
+}
+
+enum ShipmentStatus {
+  PENDING
+  READY_FOR_PICKUP
+  PICKED_UP
+  IN_TRANSIT
+  ARRIVED_AT_HUB
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED_DELIVERY
+  RETURNED
+}
+
+enum TrackingEventType {
+  ORDER_CONFIRMED
+  PACKED
+  READY_FOR_PICKUP
+  PICKED_UP
+  IN_TRANSIT
+  ARRIVED_AT_HUB
+  OUT_FOR_DELIVERY
+  DELIVERED
+  DELIVERY_FAILED
+  RETURN_PICKED_UP
+  RETURN_DELIVERED
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PICKUP_SCHEDULED
+  PICKED_UP
+  RECEIVED
+  INSPECTED
+  REFUND_INITIATED
+  COMPLETED
+  CANCELLED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+}
+
+enum CouponScope {
+  PLATFORM
+  SELLER
+  CATEGORY
+  PRODUCT
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum InventoryReason {
+  SEED
+  RESTOCK
+  MANUAL_ADJUST
+  RESERVE
+  RELEASE_RESERVATION
+  COMMIT_SALE
+  CANCEL_RESTOCK
+  RETURN_RESTOCK
+}
+
+enum ReservationStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
+enum NotificationType {
+  SELLER_APPLICATION
+  SELLER_APPROVED
+  SELLER_REJECTED
+  PRODUCT_APPROVED
+  PRODUCT_REJECTED
+  NEW_ORDER
+  ORDER_STATUS
+  PAYOUT
+  RETURN_REQUEST
+  REFUND
+}
+
+// ---------------------------------------------------------------------------
+// IDENTITY
+// ---------------------------------------------------------------------------
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  phone               String?   @unique
+  passwordHash        String // bcrypt — NEVER plain text
+  role                Role      @default(CUSTOMER)
+  name                String?
+  emailVerifiedAt     DateTime?
+  phoneVerifiedAt     DateTime?
+  isActive            Boolean   @default(true)
+  lastLoginAt         DateTime?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  customer      Customer?
+  seller        Seller?
+  sessions      Session[]
+  tokens        VerificationToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  @@index([role])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique // we store a hash of the session id, never the raw cookie
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  purpose   String // EMAIL_VERIFY | PASSWORD_RESET | PHONE_VERIFY
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("verification_tokens")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  fullName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  addresses   Address[]
+  cart        Cart?
+  wishlist    Wishlist?
+  orders      Order[]
+  reviews     Review[]
+  couponUsage CouponUsage[]
+  returns     ReturnRequest[]
+
+  @@map("customers")
+}
+
+model Seller {
+  id              String       @id @default(cuid())
+  userId          String       @unique
+  businessName    String
+  slug            String       @unique
+  legalName       String?
+  ownerName       String
+  businessEmail   String
+  businessPhone   String
+  addressLine1    String?
+  addressLine2    String?
+  city            String?
+  state           String?
+  pincode         String?
+  country         String       @default("India")
+  description     String?
+  logoUrl         String?
+  status          SellerStatus @default(DRAFT)
+  // Seller-specific override; null => fall back to category, then platform default.
+  commissionRate  Decimal?     @db.Decimal(5, 2)
+  rejectionReason String?
+  approvedAt      DateTime?
+  approvedById    String?
+  suspendedAt     DateTime?
+  ratingAvg       Decimal      @default(0) @db.Decimal(3, 2)
+  ratingCount     Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kyc          SellerKyc?
+  products     Product[]
+  sellerOrders SellerOrder[]
+  commissions  Commission[]
+  payouts      Payout[]
+  coupons      Coupon[]
+  inventoryLog InventoryMovement[]
+  bankAccount  SellerBankAccount?
+
+  @@index([status])
+  @@index([slug])
+  @@index([createdAt])
+  @@map("sellers")
+}
+
+// KYC is a separate table so sensitive fields are never selected by accident
+// when loading a seller for a public page.
+model SellerKyc {
+  id       String @id @default(cuid())
+  sellerId String @unique
+
+  panNumber      String?
+  gstNumber      String?
+  msmeNumber     String?
+  // Aadhaar is stored ONLY as a last-4 reference + a hash. The full number is
+  // never persisted. §4 of the spec: do not needlessly expose KYC data.
+  aadhaarLast4   String?
+  aadhaarHash    String?
+
+  panDocUrl      String?
+  gstDocUrl      String?
+  addressDocUrl  String?
+  bankDocUrl     String?
+
+  verificationStatus KycStatus @default(DRAFT)
+  rejectionReason    String?
+  reviewedById       String?
+  reviewedAt         DateTime?
+  submittedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([verificationStatus])
+  @@map("seller_kyc")
+}
+
+model SellerBankAccount {
+  id                String   @id @default(cuid())
+  sellerId          String   @unique
+  accountHolderName String
+  // Only the last 4 digits are kept in the clear; the full number is hashed.
+  accountLast4      String
+  accountHash       String
+  ifsc              String
+  bankName          String?
+  branch            String?
+  isVerified        Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@map("seller_bank_accounts")
+}
+
+model Address {
+  id         String  @id @default(cuid())
+  customerId String
+  label      String? @default("Home")
+  fullName   String
+  phone      String
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  pincode    String
+  country    String  @default("India")
+  isDefault  Boolean @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("addresses")
+}
+
+// ---------------------------------------------------------------------------
+// CATALOG
+// ---------------------------------------------------------------------------
+
+model Category {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  parentId       String?
+  imageUrl       String?
+  description    String?
+  // Category-level commission override; null => platform default.
+  commissionRate Decimal? @db.Decimal(5, 2)
+  taxRate        Decimal  @default(0) @db.Decimal(5, 2)
+  isActive       Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+  coupons  Coupon[]
+
+  @@index([slug])
+  @@index([parentId])
+  @@map("categories")
+}
+
+model Brand {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  logoUrl   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  products Product[]
+
+  @@index([slug])
+  @@map("brands")
+}
+
+model Product {
+  id          String @id @default(cuid())
+  sellerId    String
+  categoryId  String
+  brandId     String?
+
+  name            String
+  slug            String  @unique
+  latinName       String?
+  description     String?
+  sku             String
+  // Money in paise.
+  price           Int
+  compareAtPrice  Int?
+  taxRate         Decimal @default(0) @db.Decimal(5, 2)
+
+  status         ProductStatus  @default(DRAFT)
+  approvalStatus ApprovalStatus @default(PENDING)
+  rejectionReason String?
+  approvedAt     DateTime?
+  approvedById   String?
+
+  weightGrams Int?
+  lengthMm    Int?
+  widthMm     Int?
+  heightMm    Int?
+
+  // Plant-care attributes carried over from v1's catalog so the existing
+  // product UI keeps working.
+  careLight      String?
+  careWater      String?
+  careTemp       String?
+  careDifficulty String?
+  careSafety     String?
+  originLabel    String?
+
+  ratingAvg   Decimal @default(0) @db.Decimal(3, 2)
+  ratingCount Int     @default(0)
+  soldCount   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller     Seller            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category   Category          @relation(fields: [categoryId], references: [id])
+  brand      Brand?            @relation(fields: [brandId], references: [id])
+  images     ProductImage[]
+  variants   ProductVariant[]
+  inventory  Inventory?
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  reviews    Review[]
+  wishlistItems WishlistItem[]
+  coupons    Coupon[]
+  movements  InventoryMovement[]
+  reservations StockReservation[]
+
+  @@unique([sellerId, sku])
+  @@index([sellerId])
+  @@index([categoryId])
+  @@index([status, approvalStatus])
+  @@index([slug])
+  @@index([sku])
+  @@index([createdAt])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  url       String
+  alt       String?
+  sortOrder Int     @default(0)
+  isPrimary Boolean @default(false)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+model ProductVariant {
+  id             String  @id @default(cuid())
+  productId      String
+  name           String // e.g. "Pot size"
+  value          String // e.g. "8 inch"
+  sku            String
+  price          Int? // paise; null => inherit product price
+  compareAtPrice Int?
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+
+  product      Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventory    Inventory?
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  reservations StockReservation[]
+
+  @@unique([productId, sku])
+  @@index([productId])
+  @@map("product_variants")
+}
+
+// ---------------------------------------------------------------------------
+// INVENTORY
+// ---------------------------------------------------------------------------
+// available = onHand - reserved, enforced by a CHECK constraint added in the
+// migration (see prisma/migrations). Overselling is impossible at the DB level.
+
+model Inventory {
+  id        String  @id @default(cuid())
+  productId String? @unique
+  variantId String? @unique
+
+  onHand            Int @default(0)
+  reserved          Int @default(0)
+  lowStockThreshold Int @default(10)
+
+  updatedAt DateTime @updatedAt
+
+  product Product?        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@map("inventory")
+}
+
+model InventoryMovement {
+  id        String          @id @default(cuid())
+  productId String
+  variantId String?
+  sellerId  String
+  reason    InventoryReason
+  delta     Int // signed change to onHand
+  reservedDelta Int        @default(0)
+  onHandAfter   Int
+  reservedAfter Int
+  refType   String? // ORDER | SELLER_ORDER | RETURN | MANUAL
+  refId     String?
+  note      String?
+  actorId   String?
+  createdAt DateTime        @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  seller  Seller  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@index([sellerId, createdAt])
+  @@index([refType, refId])
+  @@map("inventory_movements")
+}
+
+// A reservation holds stock while the customer pays. Expired reservations are
+// released by lib/server/inventory.ts#releaseExpiredReservations (called by the
+// checkout path and the /api/cron/release-reservations endpoint).
+model StockReservation {
+  id        String            @id @default(cuid())
+  orderId   String
+  productId String
+  variantId String?
+  quantity  Int
+  status    ReservationStatus @default(HELD)
+  expiresAt DateTime
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
+
+  @@index([orderId])
+  @@index([status, expiresAt])
+  @@map("stock_reservations")
+}
+
+// ---------------------------------------------------------------------------
+// CART & WISHLIST
+// ---------------------------------------------------------------------------
+
+model Cart {
+  id         String   @id @default(cuid())
+  customerId String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customer Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  productId String
+  variantId String?
+  quantity  Int
+  addedAt   DateTime @default(now())
+
+  cart    Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  // NOTE: no price column. Price is ALWAYS re-read from the product at
+  // quote/checkout time (§10).
+  @@unique([cartId, productId, variantId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Wishlist {
+  id         String   @id @default(cuid())
+  customerId String   @unique
+  createdAt  DateTime @default(now())
+
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    WishlistItem[]
+
+  @@map("wishlists")
+}
+
+model WishlistItem {
+  id         String   @id @default(cuid())
+  wishlistId String
+  productId  String
+  addedAt    DateTime @default(now())
+
+  wishlist Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([wishlistId, productId])
+  @@index([wishlistId])
+  @@map("wishlist_items")
+}
+
+// ---------------------------------------------------------------------------
+// ORDERS  (§8 — the multi-seller core)
+// ---------------------------------------------------------------------------
+
+model Order {
+  id          String @id @default(cuid())
+  orderNumber String @unique
+  customerId  String
+
+  // All money in paise, all computed server-side (§10).
+  subtotal    Int
+  discount    Int @default(0)
+  tax         Int @default(0)
+  shippingFee Int @default(0)
+  grandTotal  Int
+
+  paymentStatus PaymentStatus @default(PENDING)
+  orderStatus   OrderStatus   @default(PENDING_PAYMENT)
+
+  // Addresses are SNAPSHOTTED as JSON. If the customer later edits or deletes
+  // the address book entry, historical orders must not change.
+  billingAddress  Json
+  shippingAddress Json
+
+  couponCode     String?
+  customerNote   String?
+  cancelledAt    DateTime?
+  cancelReason   String?
+  confirmedAt    DateTime?
+  // Set when a reservation window opens; used to expire unpaid orders.
+  reservationExpiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer     Customer           @relation(fields: [customerId], references: [id])
+  sellerOrders SellerOrder[]
+  payments     Payment[]
+  reservations StockReservation[]
+  couponUsage  CouponUsage[]
+  refunds      Refund[]
+
+  @@index([customerId, createdAt])
+  @@index([orderStatus])
+  @@index([paymentStatus])
+  @@index([createdAt])
+  @@index([orderNumber])
+  @@map("orders")
+}
+
+// The unit of fulfilment. One per seller per order.
+model SellerOrder {
+  id                String @id @default(cuid())
+  orderId           String
+  sellerId          String
+  sellerOrderNumber String @unique // e.g. AGM-1001-A
+
+  subtotal    Int
+  discount    Int @default(0)
+  tax         Int @default(0)
+  shippingFee Int @default(0)
+  // Seller's share of the order total the customer paid.
+  grossAmount Int
+
+  commissionRate   Decimal @db.Decimal(5, 2)
+  commissionAmount Int
+  sellerEarning    Int
+
+  status        SellerOrderStatus @default(PENDING)
+  paymentStatus PaymentStatus     @default(PENDING)
+  payoutStatus  PayoutStatus      @default(PENDING)
+
+  acceptedAt   DateTime?
+  packedAt     DateTime?
+  shippedAt    DateTime?
+  deliveredAt  DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order      Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  seller     Seller          @relation(fields: [sellerId], references: [id])
+  items      OrderItem[]
+  shipments  Shipment[]
+  commission Commission?
+  payout     Payout?
+  returns    ReturnRequest[]
+  refunds    Refund[]
+  statusLog  SellerOrderStatusLog[]
+
+  @@index([orderId])
+  @@index([sellerId, createdAt])
+  @@index([status])
+  @@index([payoutStatus])
+  @@index([sellerOrderNumber])
+  @@map("seller_orders")
+}
+
+model SellerOrderStatusLog {
+  id            String            @id @default(cuid())
+  sellerOrderId String
+  fromStatus    SellerOrderStatus?
+  toStatus      SellerOrderStatus
+  actorId       String?
+  actorRole     Role?
+  note          String?
+  createdAt     DateTime          @default(now())
+
+  sellerOrder SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+
+  @@index([sellerOrderId, createdAt])
+  @@map("seller_order_status_logs")
+}
+
+// Items hang off SellerOrder, not Order — and carry snapshots (§8).
+model OrderItem {
+  id            String  @id @default(cuid())
+  sellerOrderId String
+  productId     String
+  variantId     String?
+  sellerId      String
+
+  // SNAPSHOTS — immutable record of what was actually sold.
+  productNameSnapshot String
+  skuSnapshot         String
+  imageSnapshot       String?
+  variantSnapshot     String?
+
+  quantity    Int
+  unitPrice   Int // paise, at time of sale
+  discount    Int @default(0)
+  tax         Int @default(0)
+  total       Int // quantity*unitPrice - discount + tax
+
+  // Review eligibility is driven off this row (§19).
+  reviewedAt DateTime?
+
+  sellerOrder SellerOrder     @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+  product     Product         @relation(fields: [productId], references: [id])
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  review      Review?
+  returnItems ReturnItem[]
+
+  @@index([sellerOrderId])
+  @@index([productId])
+  @@index([sellerId])
+  @@map("order_items")
+}
+
+// ---------------------------------------------------------------------------
+// PAYMENTS (§14)
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id      String @id @default(cuid())
+  orderId String
+
+  provider        PaymentProvider
+  providerOrderId String? // razorpay_order_id / stripe payment_intent id
+  providerPaymentId String? @unique
+  // Idempotency: a webhook that arrives twice must not be processed twice.
+  providerSignature String?
+  amount          Int // paise — the server-computed amount, never from client
+  currency        String        @default("INR")
+  status          PaymentStatus @default(PENDING)
+  method          String?
+  failureReason   String?
+  capturedAt      DateTime?
+  refundedAmount  Int           @default(0)
+  rawPayload      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@index([orderId])
+  @@index([status])
+  @@index([providerOrderId])
+  @@map("payments")
+}
+
+// Every webhook delivery is recorded. The unique eventId makes replay a no-op.
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  provider    PaymentProvider
+  eventId     String
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@index([processedAt])
+  @@map("webhook_events")
+}
+
+// ---------------------------------------------------------------------------
+// COMMISSION & PAYOUT (§12, §13)
+// ---------------------------------------------------------------------------
+
+model Commission {
+  id            String @id @default(cuid())
+  sellerId      String
+  orderId       String
+  sellerOrderId String @unique
+
+  rate             Decimal          @db.Decimal(5, 2)
+  grossAmount      Int
+  commissionAmount Int
+  sellerAmount     Int
+  status           CommissionStatus @default(PENDING)
+  reversedAmount   Int              @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller      Seller      @relation(fields: [sellerId], references: [id])
+  sellerOrder SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, createdAt])
+  @@index([orderId])
+  @@index([status])
+  @@map("commissions")
+}
+
+model Payout {
+  id            String @id @default(cuid())
+  sellerId      String
+  sellerOrderId String @unique
+
+  grossAmount      Int
+  commissionAmount Int
+  refundAdjustment Int          @default(0)
+  netAmount        Int
+  status           PayoutStatus @default(PENDING)
+  // Only ever set from a verified provider callback (§13).
+  providerReference String?
+  failureReason    String?
+  processedAt      DateTime?
+  // Earliest date this payout may be released (delivery + return window).
+  eligibleAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller      Seller      @relation(fields: [sellerId], references: [id])
+  sellerOrder SellerOrder @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, status])
+  @@index([status, eligibleAt])
+  @@map("payouts")
+}
+
+// ---------------------------------------------------------------------------
+// SHIPPING & TRACKING (§16, §17)
+// ---------------------------------------------------------------------------
+
+model Shipment {
+  id            String @id @default(cuid())
+  sellerOrderId String
+
+  courier            String?
+  trackingNumber     String?
+  awbNumber          String?
+  status             ShipmentStatus @default(PENDING)
+  estimatedDelivery  DateTime?
+  actualDelivery     DateTime?
+  pickupDate         DateTime?
+  deliveredAt        DateTime?
+  shippingLabelUrl   String?
+  weightGrams        Int?
+  failureReason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sellerOrder SellerOrder     @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+  events      TrackingEvent[]
+
+  @@index([sellerOrderId])
+  @@index([trackingNumber])
+  @@index([status])
+  @@map("shipments")
+}
+
+model TrackingEvent {
+  id         String            @id @default(cuid())
+  shipmentId String
+  status     TrackingEventType
+  location   String?
+  message    String?
+  eventTime  DateTime          @default(now())
+  createdAt  DateTime          @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, eventTime])
+  @@map("tracking_events")
+}
+
+// ---------------------------------------------------------------------------
+// RETURNS & REFUNDS (§18)
+// ---------------------------------------------------------------------------
+
+model ReturnRequest {
+  id            String @id @default(cuid())
+  returnNumber  String @unique
+  sellerOrderId String
+  customerId    String
+
+  reason           String
+  description      String?
+  status           ReturnStatus @default(REQUESTED)
+  imageUrls        Json?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  pickupScheduledAt DateTime?
+  receivedAt       DateTime?
+  inspectionNote   String?
+  restock          Boolean      @default(true)
+  refundAmount     Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sellerOrder SellerOrder  @relation(fields: [sellerOrderId], references: [id], onDelete: Cascade)
+  customer    Customer     @relation(fields: [customerId], references: [id])
+  items       ReturnItem[]
+  refund      Refund?
+
+  @@index([sellerOrderId])
+  @@index([customerId])
+  @@index([status])
+  @@map("returns")
+}
+
+model ReturnItem {
+  id          String @id @default(cuid())
+  returnId    String
+  orderItemId String
+  quantity    Int
+  refundAmount Int   @default(0)
+
+  returnRequest ReturnRequest @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id])
+
+  @@unique([returnId, orderItemId])
+  @@index([returnId])
+  @@map("return_items")
+}
+
+model Refund {
+  id            String @id @default(cuid())
+  orderId       String
+  sellerOrderId String?
+  paymentId     String?
+  returnId      String? @unique
+
+  amount            Int
+  // How much platform commission was clawed back for this refund (§18).
+  commissionReversed Int          @default(0)
+  sellerDebit       Int           @default(0)
+  reason            String?
+  status            RefundStatus  @default(PENDING)
+  providerRefundId  String?
+  processedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sellerOrder   SellerOrder?   @relation(fields: [sellerOrderId], references: [id])
+  payment       Payment?       @relation(fields: [paymentId], references: [id])
+  returnRequest ReturnRequest? @relation(fields: [returnId], references: [id])
+
+  @@index([orderId])
+  @@index([sellerOrderId])
+  @@index([status])
+  @@map("refunds")
+}
+
+// ---------------------------------------------------------------------------
+// REVIEWS (§19)
+// ---------------------------------------------------------------------------
+
+model Review {
+  id          String @id @default(cuid())
+  customerId  String
+  productId   String
+  // The purchase that entitles this review. Unique => one review per
+  // purchased item, and impossible to review something you didn't buy.
+  orderItemId String @unique
+
+  rating    Int
+  title     String?
+  comment   String?
+  imageUrls Json?
+  status    ReviewStatus @default(PUBLISHED)
+  sellerReply String?
+  sellerRepliedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([productId, status])
+  @@index([customerId])
+  @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// COUPONS (§20)
+// ---------------------------------------------------------------------------
+
+model Coupon {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  scope       CouponScope @default(PLATFORM)
+  description String?
+
+  discountType  DiscountType
+  discountValue Int // percent (0-100) or paise for FIXED
+  maxDiscount   Int? // paise cap for PERCENT
+  minOrderValue Int          @default(0)
+
+  // Scoping targets — exactly one is set for SELLER/CATEGORY/PRODUCT scope.
+  sellerId   String?
+  categoryId String?
+  productId  String?
+
+  startsAt          DateTime
+  expiresAt         DateTime
+  usageLimit        Int? // total redemptions allowed
+  usageCount        Int      @default(0)
+  perCustomerLimit  Int      @default(1)
+  isActive          Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  seller   Seller?       @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category Category?     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  product  Product?      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  usages   CouponUsage[]
+
+  @@index([code])
+  @@index([isActive, startsAt, expiresAt])
+  @@map("coupons")
+}
+
+model CouponUsage {
+  id         String   @id @default(cuid())
+  couponId   String
+  customerId String
+  orderId    String
+  discount   Int
+  usedAt     DateTime @default(now())
+
+  coupon   Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, orderId])
+  @@index([couponId, customerId])
+  @@map("coupon_usage")
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String?
+  linkUrl   String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  Role?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}

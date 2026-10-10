@@ -8,7 +8,7 @@
 //    next to the offending input.
 
 import { NextResponse } from 'next/server';
-import { ZodError, type ZodSchema } from 'zod';
+import { ZodError, type ZodTypeAny, type z } from 'zod';
 import { Prisma } from './prisma';
 import { isProd } from './env';
 
@@ -192,23 +192,40 @@ function humanField(field: string): string {
     .toLowerCase();
 }
 
+// Both helpers below are generic over the SCHEMA, not over the parsed type, and
+// return `z.infer<S>` — the schema's OUTPUT.
+//
+// The obvious-looking `<T>(req, schema: ZodSchema<T>): T` is wrong, and wrong in
+// a way that only shows up on schemas with `.default()`, `.coerce` or
+// `.transform()`. `ZodSchema<Output, Def, Input>` defaults `Input = Output`, so
+// writing `ZodSchema<T>` asserts the two are the same type. For
+// `paginationSchema` they are not: its output is `{ page: number; perPage:
+// number }` but its input is `{ page?: unknown; perPage?: unknown }`, because
+// both fields have defaults. TypeScript then has to satisfy T from both
+// positions at once and settles on the optional input shape, so every caller
+// destructuring `const { page } = parseQuery(...)` gets `number | undefined`
+// and `(page - 1) * perPage` fails to compile.
+//
+// `S extends ZodTypeAny` plus `z.infer<S>` reads the output slot only, which is
+// what `schema.parse()` actually returns at runtime.
+
 /** Parse + validate a JSON body. Throws a 422 with field errors on failure. */
-export async function parseBody<T>(req: Request, schema: ZodSchema<T>): Promise<T> {
+export async function parseBody<S extends ZodTypeAny>(req: Request, schema: S): Promise<z.infer<S>> {
   let json: unknown;
   try {
     json = await req.json();
   } catch {
     throw badRequest('Request body must be valid JSON.');
   }
-  return schema.parse(json);
+  return schema.parse(json) as z.infer<S>;
 }
 
 /** Parse + validate query params. */
-export function parseQuery<T>(req: Request, schema: ZodSchema<T>): T {
+export function parseQuery<S extends ZodTypeAny>(req: Request, schema: S): z.infer<S> {
   const url = new URL(req.url);
   const raw: Record<string, string> = {};
   url.searchParams.forEach((v, k) => {
     raw[k] = v;
   });
-  return schema.parse(raw);
+  return schema.parse(raw) as z.infer<S>;
 }

@@ -433,6 +433,19 @@ npx prisma migrate deploy
 npm run build && npm start
 ```
 
+### `npm run build` typechecks before it compiles
+
+The build is `prisma generate && tsc --noEmit && next build`, and the middle
+step is there on purpose even though `next build` typechecks too.
+
+`next build` **stops at the first type error**. One root cause spread over
+sixteen files therefore looks like sixteen unrelated failures, each costing a
+full remote build to discover. `tsc --noEmit` reports every error in one pass,
+so a deploy either tells you everything that is wrong or nothing is.
+
+Run `npm run typecheck` before pushing and the remote build has nothing left to
+find.
+
 ### Everything `next build` needs lives in `dependencies`
 
 There are no `devDependencies` in this project, on purpose. Managed hosts

@@ -21,6 +21,7 @@
  * Environment: DATABASE_URL, or PGHOST/PGUSER/PGPASSWORD/PGDATABASE.
  */
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { quote, ZERO_SHIPPING_POLICY, type PricedLine } from '../lib/shared/pricing';
 import { rupeesToPaise, formatPaise } from '../lib/shared/money';
 import { deriveOrderStatus } from '../lib/shared/order-status';
@@ -29,6 +30,18 @@ import { reverseCommission } from '../lib/shared/commission';
 // ---------------------------------------------------------------------------
 // psql plumbing
 // ---------------------------------------------------------------------------
+
+// Load .env if dotenv happens to be installed. This script is deliberately
+// dependency-free — it needs only `psql` — so a missing dotenv must not stop
+// it: CI and shells that already export DATABASE_URL/PG* work fine without it.
+//
+// Loaded synchronously via createRequire rather than `await import`, because a
+// top-level await would make this module async and break the sync entry path.
+try {
+  createRequire(import.meta.url)('dotenv/config');
+} catch {
+  /* no dotenv installed: rely on the environment already being set */
+}
 
 const conn = (() => {
   const url = process.env.DATABASE_URL;

@@ -16,6 +16,13 @@
  * Passwords are bcrypt-hashed like any other account. They are printed at the
  * end for convenience; change them before any real deployment.
  */
+// Load .env before anything touches process.env.
+//
+// This matters because `tsx` does NOT read .env on its own — only the Prisma
+// CLI does. Without this, PrismaClient here throws
+// "Environment variable not found: DATABASE_URL" even though .env is correct.
+import 'dotenv/config';
+
 import { PrismaClient, type Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 

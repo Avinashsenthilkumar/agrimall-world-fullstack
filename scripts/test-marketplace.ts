@@ -26,6 +26,13 @@
  *
  * Exits non-zero if anything fails.
  */
+// Load .env before anything touches process.env.
+//
+// This matters because `tsx` does NOT read .env on its own — only the Prisma
+// CLI does. Without this, PrismaClient here throws
+// "Environment variable not found: DATABASE_URL" even though .env is correct.
+import 'dotenv/config';
+
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
